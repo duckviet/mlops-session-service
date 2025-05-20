@@ -9,11 +9,16 @@ services:
     volumes:
       - redis_data:/data
   app:
+    image: 22520273/session-service-app:latest
     build: .
+    volumes:
+      - .:/app
     ports:
       - "8000:8000"
     depends_on:
       - redis
+    environment:
+      PYTHONUNBUFFERED: "1"
 volumes:
   redis_data:
 #   zookeeper:

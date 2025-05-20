@@ -19,10 +19,8 @@ app = FastAPI()
 try:
     ranker = joblib.load("model/lgbm_ranker.joblib")
 except FileNotFoundError:
-    # Fallback or error handling if model is not found
     print("Error: Model file 'model/lgbm_ranker.joblib' not found.")
-    # You might want to raise an exception or exit if the model is critical
-    ranker = None # Or a dummy ranker for testing purposes if applicable
+    ranker = None 
 
 feature_cols = [
     "aid",
@@ -52,12 +50,6 @@ class RecResponse(BaseModel):
     session_id: int
     recommendations: List[Recommendation]
 
-# Define ALL_PRODUCT_IDS (make sure this range is sensible for your data)
-# Example: if your product IDs are large integers as seen in the parquet.
-# For testing, you might use a smaller, more manageable range.
-# Based on your parquet sample, session IDs are large, aid can also be large.
-# Let's use a placeholder range. Replace with actual product ID range or load from a file.
-# train['aid'].unique().to_list() could give you actual aids if train is available here.
 ALL_PRODUCT_IDS = list(range(1, 2000000)) # Example: 2 million products
 
 def generate_candidates_for_session(
@@ -123,7 +115,10 @@ def recommend(req: RecRequest):
     X_candidates = df_candidates_processed.select(feature_cols).to_pandas()
     
     # Predict scores for candidates
-    candidate_scores = ranker.predict(X_candidates)
+    if hasattr(ranker, "booster_"):
+        candidate_scores = ranker.booster_.predict(X_candidates.values)
+    else:
+        candidate_scores = ranker.predict(X_candidates)
 
     results = []
     # Get AIDs from the filtered DataFrame to ensure correct order

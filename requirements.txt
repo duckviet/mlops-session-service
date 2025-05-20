@@ -11,4 +11,5 @@ pytest==8.3.5
 numpy==2.0.2
 lightgbm==4.6.0
 httpx==0.28.1
-#pandas==2.2.3
+pyarrow==19.0.1
+pandas>=2.0.3

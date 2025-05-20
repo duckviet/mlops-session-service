@@ -1,1 +1,69 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+env/
+.session-venv*/
+*.env
+*.venv
+.Python
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/
+
+# Log files
+*.log
+
+# dotenv
+.env
+.env.*
+
+# Docker
+*.pid
+*.pid.lock
+
+# Test output
+htmlcov/
+.coverage
+.tox/
+.cache/
+pytest_cache/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Kafka/Redis local data (if any)
+kafka-logs/
+redis-data/
+
+# Build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Misc
+.DS_Store
+Thumbs.db
+
+# Ignore local settings
+local_settings.py
+
+# Ignore Docker Compose override files
+docker-compose.override.yml
+
+# Ignore pip wheel files
+*.whl
 
