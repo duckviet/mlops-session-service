@@ -3,5 +3,12 @@ fastapi==0.115.0
 uvicorn==0.30.6 
 pydantic==2.9.2 
 redis==5.0.8 
-confluent-kafka==2.5.3 
+#confluent-kafka==2.5.3 
 python-dotenv==1.0.1
+joblib==1.4.2
+polars-lts-cpu==1.29.0
+pytest==8.3.5
+numpy==2.0.2
+lightgbm==4.6.0
+httpx==0.28.1
+#pandas==2.2.3
