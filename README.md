@@ -84,10 +84,28 @@ docker-compose logs -f app
 
 Swagger UI: `http://127.0.0.1:8000/docs` to test the API.
 
+## 3. DockerHub
+```bash
+# Pull docker image 
+docker pull 22520273/session-service-app
+
+# Run docker
+docker run -d -p 8888:8000 --name session_service 22520273/session-service-app:latest
+
+# Go to `http://localhost:8888/docs` to test the API
+
+# Check run
+docker ps
+
+# Check log  --name
+docker logs session_service
+
+```
+![image](https://github.com/user-attachments/assets/e628b154-090f-4304-a126-f7639a282387)
+
 ---
 ### DEMO DOCKER SERVING
 [![Watch the video](demo.gif)]
-
 
 
 ## API Usage
