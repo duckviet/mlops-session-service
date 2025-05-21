@@ -2,23 +2,9 @@
 
 import pytest
 from fastapi.testclient import TestClient
-# Ensure main and ALL_PRODUCT_IDS are importable
-# If main.py is in the same directory, this should work.
-# Otherwise, adjust PYTHONPATH or use relative imports if part of a package.
 from main import app, ALL_PRODUCT_IDS
 
 client = TestClient(app)
-
-# Use a smaller, manageable subset of ALL_PRODUCT_IDS for testing
-# to make tests faster and more predictable if needed.
-# However, for these tests, we'll rely on the ALL_PRODUCT_IDS from main.
-# Ensure ALL_PRODUCT_IDS in main.py is not excessively large for tests to run reasonably.
-# If ALL_PRODUCT_IDS is huge, consider mocking generate_candidates_for_session
-# or using a specific, smaller list for testing.
-
-# For robust testing, especially with randomness, mocking generate_candidates_for_session
-# to return a fixed list of candidates would be ideal.
-# For now, we test general properties.
 
 def test_recommendations_basic_case_new_items():
     """
@@ -52,7 +38,7 @@ def test_recommendations_basic_case_new_items():
     # Number of recommendations should be <= top_k
     assert len(recommendations) <= payload["top_k"]
 
-    # If candidates can be generated, we expect some recommendations (unless top_k is 0)
+ 
     # This depends on the size of ALL_PRODUCT_IDS vs num_candidates in generate_candidates
     if len(ALL_PRODUCT_IDS) > len(current_aids_in_session) and payload["top_k"] > 0:
         if len(recommendations) == 0 and len(ALL_PRODUCT_IDS) - len(current_aids_in_session) >=1 :

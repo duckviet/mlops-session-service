@@ -15,4 +15,4 @@ COPY . /app
 EXPOSE 8000 
 
 ENTRYPOINT ["uvicorn"]
-CMD ["main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["main:app", "--host", "127.0.0.1", "--port", "8000", "--reload"]

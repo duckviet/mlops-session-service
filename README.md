@@ -34,39 +34,39 @@ Session-based recommendation API built with FastAPI, Polars, and LightGBM.
 
 ## Quickstart
 
-### Prerequisites
-- Pull Images from DockerHub
-- Docker & Docker Compose  
-- (Optional) Python 3.10, virtualenv for local runs
+### How to install
 
 ### 1. Local Python Run
 
 ```bash
 # create new venv(python 3.10) (if needed)
+
 ## Build python 3.10 (if you don't have)
 sudo apt update
 sudo apt install -y wget build-essential libssl-dev zlib1g-dev \
   libncurses5-dev libbz2-dev libreadline-dev libsqlite3-dev curl \
   libffi-dev liblzma-dev tk-dev
 cd /usr/src
-sudo wget 
-https://www.python.org/ftp/python/3.10.13/Python-3.10.13.tgz
+sudo wget https://www.python.org/ftp/python/3.10.13/Python-3.10.13.tgz
 sudo tar xzf Python-3.10.13.tgz
 cd Python-3.10.13
 sudo ./configure --enable-optimizations
 sudo make -j$(nproc)
 sudo make altinstall
+
 ## create new virtual venv avoid conflicts
 python3.10 -m venv .venv
 source .venv/bin/activate
 
+# (from /usr/src/Python-3.10.13)
+cd ~/mlops-session-service 
+
 # Install deps
-pip install --no-cache-dir -r requirements.txt
+pip install -r requirements.txt
 
 # then start Uvicorn
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
-
 Open your browser at `http://127.0.0.1:8000/docs` to test the API.
 
 ### 2. Docker & Compose
@@ -75,14 +75,14 @@ Open your browser at `http://127.0.0.1:8000/docs` to test the API.
 # build service images
 docker-compose build
 
-# launch app + Redis in background
+# launch app
 docker-compose up -d
 
 # follow logs
 docker-compose logs -f app
 ```
 
-Swagger UI: `http://<HOST_IP>:8000/docs` to test the API.
+Swagger UI: `http://127.0.0.1:8000/docs` to test the API.
 
 ---
 ### DEMO DOCKER SERVING
