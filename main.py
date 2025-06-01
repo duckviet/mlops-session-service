@@ -1,26 +1,36 @@
 # main.py
-from fastapi import FastAPI, HTTPException
-# from models import Session, Action # Commented out as not used
-# from redis_client import RedisClient
-# from kafka_producer import KafkaProducer
-# import uuid # Commented out as not used
+import random
 import joblib
 import polars as pl
+
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
-import random # Import random for generate_candidates_for_session
+from contextlib import asynccontextmanager
 
-# Assuming process_pipeline.py exists in the same directory or is in PYTHONPATH
 from process_pipeline import pipeline, apply
+from kafka_producer import KafkaProducer
+from models import Session ,Event      
 
-app = FastAPI()
+# ----- Khởi KafkaProducer -----
+kafka_producer = KafkaProducer(bootstrap_servers="kafka:9092")
 
-# ----- Startup: load model và định nghĩa feature_cols -----
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    await kafka_producer.start()
+    yield
+    # Shutdown
+    await kafka_producer.stop()
+
+app = FastAPI(lifespan=lifespan)
+
+# ----- Load ranker và feature cols -----
 try:
     ranker = joblib.load("model/lgbm_ranker.joblib")
 except FileNotFoundError:
     print("Error: Model file 'model/lgbm_ranker.joblib' not found.")
-    ranker = None 
+    ranker = None
 
 feature_cols = [
     "aid",
@@ -31,11 +41,6 @@ feature_cols = [
     "type_weighted_log_recency_score",
 ]
 
-class Event(BaseModel):
-    # session: int # session_id is now part of RecRequest
-    aid: int
-    ts: int
-    type: int
 
 class RecRequest(BaseModel):
     session_id: int
@@ -50,88 +55,58 @@ class RecResponse(BaseModel):
     session_id: int
     recommendations: List[Recommendation]
 
-ALL_PRODUCT_IDS = list(range(1, 2000000)) # Example: 2 million products
+ALL_PRODUCT_IDS = list(range(1, 2_000_000))
 
 def generate_candidates_for_session(
     session_events: List[Event], num_candidates: int = 50
 ) -> List[int]:
-    session_aids = {e.aid for e in session_events}
-    # Filter ALL_PRODUCT_IDS to exclude those already in the session
-    potential_candidates_pool = [
-        pid for pid in ALL_PRODUCT_IDS if pid not in session_aids
-    ]
-
-    if not potential_candidates_pool:
+    seen = {e.aid for e in session_events}
+    pool = [pid for pid in ALL_PRODUCT_IDS if pid not in seen]
+    if not pool:
         return []
-    
-    if len(potential_candidates_pool) <= num_candidates:
-        return potential_candidates_pool
-    return random.sample(potential_candidates_pool, num_candidates)
+    return pool if len(pool) <= num_candidates else random.sample(pool, num_candidates)
 
-@app.post("/recommendations", response_model=RecResponse) # Corrected response_model
-def recommend(req: RecRequest):
+# ----- Endpoint chính -----
+@app.post("/recommendations", response_model=RecResponse)
+async def recommend(req: RecRequest):
     if ranker is None:
-        raise HTTPException(status_code=503, detail="Recommendation model is not available.")
+        raise HTTPException(503, "Recommendation model is not available.")
 
-    session_id = req.session_id
-    # Use model_dump() for Pydantic v2+
-    current_events_data = [e.model_dump() for e in req.current_events]
-
-    candidate_aids = generate_candidates_for_session(
-        req.current_events, num_candidates=100
+    # 1) Đẩy session events lên Kafka
+    #    (ở đây ta gửi luôn toàn bộ current_events, bạn có thể tuỳ biến)
+    session_payload = Session(
+        session_id=str(req.session_id),
+        events=[event.model_dump() for event in req.current_events]
     )
+    await kafka_producer.send_session(session_payload)
 
-    if not candidate_aids:
-        return RecResponse(session_id=session_id, recommendations=[])
+    # 2) Sinh candidates & tính score
+    current = [e.model_dump() for e in req.current_events]
+    cands = generate_candidates_for_session(req.current_events, num_candidates=100)
+    if not cands:
+        return RecResponse(session_id=req.session_id, recommendations=[])
 
-    max_ts_in_session = 0
-    if current_events_data:
-        max_ts_in_session = max(e["ts"] for e in current_events_data)
-
-    pseudo_events_data = []
-    for cand_aid in candidate_aids:
-        pseudo_events_data.append({
-            "session": session_id, # Use the same session_id for context
-            "aid": cand_aid,
-            "ts": max_ts_in_session + 1,
-            "type": 0 # Assuming type 'click' for candidates
-        })
-
-    # Combine original session events with pseudo-events for candidates
-    # This is crucial for calculating session-aware features for candidates
-    combined_events_data = current_events_data + pseudo_events_data
-    
-    df_combined = pl.DataFrame(combined_events_data)
-    
-    # Apply feature engineering pipeline
-    df_processed = apply(df_combined.clone(), pipeline)
-
-    # Filter out only the candidate rows AFTER processing for feature context
-    df_candidates_processed = df_processed.filter(pl.col("aid").is_in(candidate_aids))
-
-    if df_candidates_processed.height == 0:
-        return RecResponse(session_id=session_id, recommendations=[])
-
-    X_candidates = df_candidates_processed.select(feature_cols).to_pandas()
-    
-    # Predict scores for candidates
-    if hasattr(ranker, "booster_"):
-        candidate_scores = ranker.booster_.predict(X_candidates.values)
-    else:
-        candidate_scores = ranker.predict(X_candidates)
-
-    results = []
-    # Get AIDs from the filtered DataFrame to ensure correct order
-    candidate_aids_in_order_from_df = df_candidates_processed["aid"].to_list()
-
-    for aid, score in zip(candidate_aids_in_order_from_df, candidate_scores):
-        results.append({"aid": aid, "score": float(score)})
-
-    sorted_results = sorted(results, key=lambda x: x["score"], reverse=True)
-    
-    top_k_recommendations = [
-        Recommendation(aid=r["aid"], score=r["score"])
-        for r in sorted_results[:req.top_k]
+    max_ts = max((e["ts"] for e in current), default=0)
+    pseudo = [
+        {"session": req.session_id, "aid": aid, "ts": max_ts + 1, "type": 0}
+        for aid in cands
     ]
+    df = pl.DataFrame(current + pseudo)
+    df_proc = apply(df.clone(), pipeline)
+    df_cand = df_proc.filter(pl.col("aid").is_in(cands))
+    if df_cand.height == 0:
+        return RecResponse(session_id=req.session_id, recommendations=[])
 
-    return RecResponse(session_id=session_id, recommendations=top_k_recommendations)
+    X = df_cand.select(feature_cols).to_pandas()
+    if hasattr(ranker, "booster_"):
+        scores = ranker.booster_.predict(X.values)
+    else:
+        scores = ranker.predict(X)
+
+    # 3) Trả về top-k
+    pairs = list(zip(df_cand["aid"].to_list(), scores))
+    topk = sorted(pairs, key=lambda x: x[1], reverse=True)[: req.top_k]
+    recs = [Recommendation(aid=aid, score=float(sc)) for aid, sc in topk]
+
+    return RecResponse(session_id=req.session_id, recommendations=recs)
+
