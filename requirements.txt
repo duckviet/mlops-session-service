@@ -14,3 +14,5 @@ httpx==0.28.1
 pyarrow==19.0.1
 pandas>=2.0.3
 aiokafka==0.12.0
+scikit-learn>=1.3.0,<1.6.0
+

@@ -1,4 +1,5 @@
 # main.py
+import os
 import random
 import joblib
 import polars as pl
@@ -12,12 +13,26 @@ from process_pipeline import pipeline, apply
 from kafka_producer import KafkaProducer
 from models import Session ,Event      
 
+import asyncio, socket
+
+async def wait_for_kafka(host, port, retries=10, delay=3):
+    for i in range(retries):
+        try:
+            reader, writer = await asyncio.open_connection(host, port)
+            writer.close()
+            await writer.wait_closed()
+            return
+        except Exception:
+            await asyncio.sleep(delay)
+    raise RuntimeError(f"Cannot connect to Kafka {host}:{port}")
+
 # ----- Khởi KafkaProducer -----
 kafka_producer = KafkaProducer(bootstrap_servers="kafka:9092")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    await wait_for_kafka("kafka", 9092)
     await kafka_producer.start()
     yield
     # Shutdown
@@ -25,11 +40,35 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+MODEL_PATH = os.getenv(
+    "MODEL_PATH",
+    "/opt/models/lgbm_ranker_current.joblib"
+)
+
 # ----- Load ranker và feature cols -----
 try:
-    ranker = joblib.load("model/lgbm_ranker.joblib")
-except FileNotFoundError:
-    print("Error: Model file 'model/lgbm_ranker.joblib' not found.")
+    # Try multiple possible model locations
+    possible_paths = [
+        MODEL_PATH,
+        "/opt/models/lgbm_ranker.joblib",
+        "/opt/airflow/model/lgbm_ranker.joblib",
+        "model/lgbm_ranker.joblib"
+    ]
+    
+    ranker = None
+    for path in possible_paths:
+        try:
+            print(f"Attempting to load model from {path}")
+            ranker = joblib.load(path)
+            print(f"Successfully loaded model from {path}")
+            break
+        except FileNotFoundError:
+            continue
+    
+    if ranker is None:
+        print(f"Error: Model file not found in any of the expected locations: {possible_paths}")
+except Exception as e:
+    print(f"Error loading model: {e}")
     ranker = None
 
 feature_cols = [

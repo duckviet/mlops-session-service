@@ -1,5 +1,6 @@
 #docker-compose.yml
 
+
 version: "3.3"
 services:
   redis:
@@ -8,20 +9,6 @@ services:
       - "6380:6379"
     volumes:
       - redis_data:/data
-    networks:
-      - app-network
-  app:
-    image: 22520273/session-service-app:latest
-    build: .
-    volumes:
-      - .:/app
-    ports:
-      - "8000:8000"
-    depends_on:
-      - redis
-      - kafka
-    environment:
-      PYTHONUNBUFFERED: "1"
     networks:
       - app-network
   zookeeper:
@@ -40,6 +27,7 @@ services:
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
     depends_on:
       - zookeeper
     networks:
@@ -54,6 +42,59 @@ services:
       - "9000:9000"
     networks:
       - app-network
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    # image: apache/airflow:2.9.1-python3.10
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__CORE__FERNET_KEY: "krNzI_ZwuSPavK4zQqsRd-Gmznkq4zJ2t5E6vN5CRRg="
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./finetune_lgbm_ranker.py:/opt/airflow/finetune_lgbm_ranker.py
+      - ./process_pipeline.py:/opt/airflow/process_pipeline.py
+      - ./model:/opt/models
+      - airflow_logs:/opt/airflow/logs
+    ports:
+      - "8080:8080"
+    networks:
+      - app-network
+    depends_on:
+      - kafka
+    command: >
+      bash -c "
+        echo 'Initializing Airflow database...';
+        airflow db init;
+        echo 'Creating admin user...';
+        airflow users create --username admin --firstname Admin --lastname User --role Admin --email ducnguyenkudo@gmail.com --password admin || echo 'Admin user already exists or creation failed, continuing...';
+        echo 'Setting model directory permissions...';
+        chown -R airflow:root /opt/airflow/model && chmod -R 775 /opt/airflow/model;
+        echo 'Starting webserver...';
+        airflow webserver --port 8080 &
+        echo 'Starting scheduler...';
+        airflow scheduler
+      "
+  app:
+    image: 22520273/session-service-app:latest
+    build: .
+    volumes:
+      - .:/app
+      - ./model:/opt/models
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+      - kafka
+    environment:
+      PYTHONUNBUFFERED: "1"
+    networks:
+      - app-network
 
 networks:
   app-network:
@@ -61,4 +102,6 @@ networks:
 
 volumes:
   redis_data:
+  airflow_logs: {}
+  airflow_models:
 
