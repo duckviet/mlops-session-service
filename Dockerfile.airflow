@@ -10,13 +10,9 @@ RUN apt-get update && \
     
 COPY requirements-airflow.txt /requirements-airflow.txt
 
-RUN mkdir -p /opt/models && \
-    chown -R airflow:root /opt/models && \
-    chmod -R 775 /opt/models
-
-RUN mkdir -p /opt/airflow/model && \
-    chown -R airflow:root /opt/airflow/model && \
-    chmod -R 775 /opt/airflow/model
+RUN mkdir -p /opt/models \
+ && chown -R airflow:root /opt/models \
+ && chmod -R 775 /opt/models
 
 USER airflow
 RUN pip install --no-cache-dir -r /requirements-airflow.txt 

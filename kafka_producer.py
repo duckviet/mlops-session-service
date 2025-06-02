@@ -1,4 +1,5 @@
 # kafka_producer.py
+
 import json
 from aiokafka import AIOKafkaProducer
 from models import Session
