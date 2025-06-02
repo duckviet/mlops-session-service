@@ -26,6 +26,16 @@ env/
 # Log files
 *.log
 
+# Data folder
+data/
+
+# pycache
+__pycache__/
+**/__pycache__/
+
+# model
+model/
+
 # dotenv
 .env
 .env.*
