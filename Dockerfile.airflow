@@ -1,0 +1,22 @@
+# Sử dụng image Airflow chính thức làm base
+FROM apache/airflow:2.9.1-python3.10
+
+USER root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libgomp1 \
+    && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+    
+COPY requirements-airflow.txt /requirements-airflow.txt
+
+RUN mkdir -p /opt/models && \
+    chown -R airflow:root /opt/models && \
+    chmod -R 775 /opt/models
+
+RUN mkdir -p /opt/airflow/model && \
+    chown -R airflow:root /opt/airflow/model && \
+    chmod -R 775 /opt/airflow/model
+
+USER airflow
+RUN pip install --no-cache-dir -r /requirements-airflow.txt 
