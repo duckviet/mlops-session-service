@@ -12,8 +12,10 @@ from contextlib import asynccontextmanager
 from process_pipeline import pipeline, apply
 from kafka_producer import KafkaProducer
 from models import Session ,Event      
+from fastapi.middleware.cors import CORSMiddleware
 
 import asyncio, socket
+
 
 async def wait_for_kafka(host, port, retries=10, delay=3):
     for i in range(retries):
@@ -40,9 +42,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# ----- Add Middleware -----
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 MODEL_PATH = os.getenv(
     "MODEL_PATH",
-    "/opt/models/lgbm_ranker_current.joblib"
+    "/opt/models/lgbm_ranker.joblib"
 )
 
 # ----- Load ranker và feature cols -----
@@ -94,7 +105,7 @@ class RecResponse(BaseModel):
     session_id: int
     recommendations: List[Recommendation]
 
-ALL_PRODUCT_IDS = list(range(1, 2_000_000))
+ALL_PRODUCT_IDS = list(range(1, 200_000))
 
 def generate_candidates_for_session(
     session_events: List[Event], num_candidates: int = 50

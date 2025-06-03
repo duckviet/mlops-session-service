@@ -1,6 +1,5 @@
 #docker-compose.yml
 
-
 version: "3.3"
 services:
   redis:
@@ -42,18 +41,43 @@ services:
       - "9000:9000"
     networks:
       - app-network
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=mlflow
+      - POSTGRES_PASSWORD=mlflow
+      - POSTGRES_DB=mlflow
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=postgresql://mlflow:mlflow@postgres:5432/mlflow
+      - MLFLOW_DEFAULT_ARTIFACT_ROOT=file:///mlflow/artifacts
+    networks:
+      - app-network
+    depends_on:
+      - postgres
   airflow:
     build:
       context: .
       dockerfile: Dockerfile.airflow
-    # image: apache/airflow:2.9.1-python3.10
     environment:
       AIRFLOW__CORE__EXECUTOR: SequentialExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
-      AIRFLOW__CORE__FERNET_KEY: "krNzI_ZwuSPavK4zQqsRd-Gmznkq4zJ2t5E6vN5CRRg="
+      AIRFLOW__CORE__FERNET_KEY: "yCCu_uGL8H-OAv-Nrv5DbDDbjXFlwBsTxvfNA29jA-k="
+      MLFLOW_TRACKING_URI: "http://mlflow:5000"
     volumes:
       - ./dags:/opt/airflow/dags
       - ./data:/opt/airflow/data
@@ -67,6 +91,7 @@ services:
       - app-network
     depends_on:
       - kafka
+      - mlflow
     command: >
       bash -c "
         echo 'Initializing Airflow database...';
@@ -91,8 +116,10 @@ services:
     depends_on:
       - redis
       - kafka
+      - mlflow
     environment:
       PYTHONUNBUFFERED: "1"
+      MLFLOW_TRACKING_URI: "http://mlflow:5000"
     networks:
       - app-network
 
@@ -104,4 +131,6 @@ volumes:
   redis_data:
   airflow_logs: {}
   airflow_models:
+  mlflow_data:
+  postgres_data:
 
