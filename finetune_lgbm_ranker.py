@@ -7,6 +7,10 @@ from pathlib import Path
 from lightgbm import LGBMRanker
 import joblib
 from process_pipeline import apply, pipeline, get_session_lenghts
+import mlflow
+import mlflow.lightgbm
+from datetime import datetime
+import os
 
 def load_and_preprocess_kafka_data(events_file_path):
     """
@@ -44,7 +48,7 @@ def load_and_preprocess_kafka_data(events_file_path):
 
     # Cast types để đảm bảo consistency
     df = df.with_columns([
-        pl.col('session').cast(pl.Int32),
+        pl.col('session').cast(pl.Int64),
         pl.col('aid').cast(pl.Int32),
         pl.col('ts').cast(pl.Int64),
         pl.col('type').cast(pl.UInt8),
@@ -123,7 +127,7 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
 
     # Apply preprocessing pipeline
     train_processed = apply(train_df.clone(), pipeline)
-
+    
     # Tạo labels
     train_labels = create_training_labels(train_processed)
 
@@ -147,80 +151,153 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
     # Khởi tạo ranker là None
     ranker = None
 
-    # Check if we should fine-tune existing model
-    if not force_retrain and model_path:
-        ranker = load_existing_model_safely(model_path)
-        
-        if ranker is not None:
-            # For fine-tuning, we can train with fewer estimators
-            if hasattr(ranker, 'n_estimators'):
-                ranker.set_params(n_estimators=ranker.n_estimators + 10)
-                logging.info("Configured model for fine-tuning")
+    # MLflow experiment setup với fallback
+    experiment_name = "lgbm_ranker_training"
+    use_mlflow = True
+    
+    try:
+        mlflow.set_experiment(experiment_name)
+        logging.info("MLflow connection successful")
+    except Exception as e:
+        logging.warning(f"MLflow connection failed: {e}. Continuing without MLflow tracking.")
+        use_mlflow = False
+    
+    # Start MLflow run với try-catch
+    mlflow_run = None
+    if use_mlflow:
+        try:
+            mlflow_run = mlflow.start_run(run_name=f"training_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+            # Log parameters
+            mlflow.log_param("force_retrain", force_retrain)
+            mlflow.log_param("feature_columns", feature_cols)
+            mlflow.log_param("target_column", target)
+            mlflow.log_param("num_sessions", len(train_final['session'].unique()))
+            mlflow.log_param("num_events", len(train_final))
+        except Exception as e:
+            logging.warning(f"Failed to start MLflow run: {e}")
+            use_mlflow = False
+
+    try:
+        # Check if we should fine-tune existing model
+        if not force_retrain and model_path:
+            ranker = load_existing_model_safely(model_path)
+            
+            if ranker is not None:
+                # For fine-tuning, we can train with fewer estimators
+                if hasattr(ranker, 'n_estimators'):
+                    ranker.set_params(n_estimators=ranker.n_estimators + 10)
+                    logging.info("Configured model for fine-tuning")
+                    if use_mlflow:
+                        try:
+                            mlflow.log_param("fine_tuning", True)
+                            mlflow.log_param("n_estimators", ranker.n_estimators)
+                        except Exception as e:
+                            logging.warning(f"Failed to log MLflow params: {e}")
+                else:
+                    logging.warning("Loaded model does not have 'n_estimators' attribute. Cannot fine-tune directly.")
+                    ranker = None
+
+        # Create new model if no existing model or loading failed or force_retrain is True
+        if ranker is None:
+            if force_retrain:
+                logging.info("Force retraining enabled. Training new model from scratch.")
             else:
-                logging.warning("Loaded model does not have 'n_estimators' attribute. Cannot fine-tune directly.")
-                ranker = None
+                logging.info("No existing model found or loading failed. Training new model from scratch.")
+            
+            # Default parameters
+            params = {
+                "objective": "lambdarank",
+                "metric": "ndcg",
+                "boosting_type": "dart",
+                "n_estimators": 20,
+                "importance_type": 'gain',
+                "random_state": 42
+            }
+            
+            # Log parameters if MLflow available
+            if use_mlflow:
+                try:
+                    mlflow.log_params(params)
+                except Exception as e:
+                    logging.warning(f"Failed to log MLflow params: {e}")
+            
+            ranker = LGBMRanker(**params)
 
-    # Create new model if no existing model or loading failed or force_retrain is True
-    if ranker is None:
-        if force_retrain:
-            logging.info("Force retraining enabled. Training new model from scratch.")
-        else:
-            logging.info("No existing model found or loading failed. Training new model from scratch.")
+        # Train the model
+        logging.info("Fitting the model...")
         
-        ranker = LGBMRanker(
-            objective="lambdarank",
-            metric="ndcg",
-            boosting_type="dart",
-            n_estimators=20,
-            importance_type='gain',
-            random_state=42
+        # Kiểm tra xem train_final có đủ cột tính năng không
+        missing_features = [col for col in feature_cols if col not in train_final.columns]
+        if missing_features:
+            logging.error(f"Missing feature columns in train_final: {missing_features}. Cannot train model.")
+            raise ValueError(f"Missing feature columns: {missing_features}")
+
+        # Train with optional MLflow tracking
+        if use_mlflow:
+            try:
+                mlflow.lightgbm.autolog()
+            except Exception as e:
+                logging.warning(f"Failed to enable MLflow autolog: {e}")
+                
+        ranker.fit(
+            train_final[feature_cols].to_pandas(),
+            train_final[target].to_pandas(),
+            group=session_lengths,
         )
+        logging.info("Model fitting completed.")
 
-    # Train the model
-    logging.info("Fitting the model...")
-    
-    # Kiểm tra xem train_final có đủ cột tính năng không
-    missing_features = [col for col in feature_cols if col not in train_final.columns]
-    if missing_features:
-        logging.error(f"Missing feature columns in train_final: {missing_features}. Cannot train model.")
-        raise ValueError(f"Missing feature columns: {missing_features}")
+        # Log feature importance if MLflow available
+        if use_mlflow:
+            try:
+                feature_importance = dict(zip(feature_cols, ranker.feature_importances_))
+                mlflow.log_dict(feature_importance, "feature_importance.json")
+                mlflow.lightgbm.log_model(ranker, "model")
+            except Exception as e:
+                logging.warning(f"Failed to log to MLflow: {e}")
 
-    ranker.fit(
-        train_final[feature_cols].to_pandas(),
-        train_final[target].to_pandas(),
-        group=session_lengths,
-    )
-    logging.info("Model fitting completed.")
+        # Save to /tmp first (should always work)
+        tmp_model_path = f"/tmp/{Path(save_path).name}"
+        joblib.dump(ranker, tmp_model_path)
+        logging.info(f"Model saved to temporary location: {tmp_model_path}")
 
-    # Save to /tmp first 
-    tmp_model_path = f"/tmp/{Path(save_path).name}"
-    joblib.dump(ranker, tmp_model_path)
-    logging.info(f"Model saved to temporary location: {tmp_model_path}")
+        # Try to copy to the intended location
+        copy_success = copy_model_safely(tmp_model_path, save_path)
+        
+        # Also try to copy to other common locations for accessibility
+        backup_locations = [
+            "/opt/airflow/model/lgbm_ranker.joblib",
+            "/tmp/lgbm_ranker_backup.joblib"
+        ]
+        
+        for backup_path in backup_locations:
+            if backup_path != save_path:  # Don't duplicate if same path
+                copy_model_safely(tmp_model_path, backup_path)
 
-    # Try to copy to the intended location
-    copy_success = copy_model_safely(tmp_model_path, save_path)
-    
-    # Also try to copy to other common locations for accessibility
-    backup_locations = [
-        "/opt/airflow/model/lgbm_ranker.joblib",
-        "/tmp/lgbm_ranker_backup.joblib"
-    ]
-    
-    for backup_path in backup_locations:
-        if backup_path != save_path:  # Don't duplicate if same path
-            copy_model_safely(tmp_model_path, backup_path)
+        if copy_success:
+            logging.info(f"Model successfully saved to intended location: {save_path}")
+        else:
+            logging.warning(f"Model saved to temporary location only: {tmp_model_path}")
+            logging.warning("The model will be available for this session but may not persist after container restart")
 
-    if copy_success:
-        logging.info(f"Model successfully saved to intended location: {save_path}")
-    else:
-        logging.warning(f"Model saved to temporary location only: {tmp_model_path}")
-        logging.warning("The model will be available for this session but may not persist after container restart")
-
-    return ranker
-
+        return ranker
+        
+    finally:
+        # End MLflow run if it was started
+        if use_mlflow and mlflow_run:
+            try:
+                mlflow.end_run()
+            except Exception as e:
+                logging.warning(f"Failed to end MLflow run: {e}")
+                
+                
 def main():
     """Main function để chạy training pipeline"""
     try:
+        # Set MLflow tracking URI from environment variable
+        mlflow_tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "file:./mlruns")
+        mlflow.set_tracking_uri(mlflow_tracking_uri)
+        logging.info(f"Using MLflow tracking URI: {mlflow_tracking_uri}")
+        
         # Paths - use /opt/models as primary to match deployment structure
         events_file = 'data/events.json'
         existing_model_path = '/opt/models/lgbm_ranker_current.joblib'
