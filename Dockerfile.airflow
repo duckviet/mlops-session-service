@@ -14,5 +14,10 @@ RUN mkdir -p /opt/models \
  && chown -R airflow:root /opt/models \
  && chmod -R 775 /opt/models
 
+RUN mkdir -p /opt/airflow/model && \
+    chown -R airflow:root /opt/airflow/model && \
+    chmod -R 775 /opt/airflow/model
+
+
 USER airflow
 RUN pip install --no-cache-dir -r /requirements-airflow.txt 

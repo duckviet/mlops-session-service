@@ -85,7 +85,7 @@ def copy_model_safely(source_path, dest_path):
     try:
         # Create destination directory if it doesn't exist
         Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
-
+        
         # Copy the file
         shutil.copy2(source_path, dest_path)
         logging.info(f"Successfully copied model from {source_path} to {dest_path}")
@@ -108,7 +108,7 @@ def load_existing_model_safely(model_path):
         f"/opt/airflow/model/{Path(model_path).name}",
         f"model/{Path(model_path).name}"
     ]
-
+    
     for path in possible_paths:
         if Path(path).exists():
             try:
@@ -119,7 +119,7 @@ def load_existing_model_safely(model_path):
             except Exception as e:
                 logging.warning(f"Failed to load model from {path}: {e}")
                 continue
-
+    
     logging.info("No existing model found in any location")
     return None
 
@@ -140,11 +140,11 @@ def promote_model_to_production(model_name: str, model_version: str):
                 stage="Archived"
             )
             logging.info(f"Archived model version {model.version}")
-
+        
         # Promote new model to production
         client.transition_model_version_stage(
             name=model_name,
-            version=model_version,
+            version=model_version, 
             stage="Production"
         )
         logging.info(f"Promoted model version {model_version} to Production")
@@ -166,7 +166,7 @@ def register_and_stage_model(model_name: str, run_id: str):
             source=model_uri,
             description=f"Model trained on {datetime.now().isoformat()}"
         )
-
+        
         # Transition to Staging
         client.transition_model_version_stage(
             name=model_name,
@@ -174,7 +174,7 @@ def register_and_stage_model(model_name: str, run_id: str):
             stage="Staging",
             description="Newly trained model pending validation"
         )
-
+        
         logging.info(f"Registered model {model_name} version {result.version} in Staging")
         return result.version
     except Exception as e:
@@ -190,7 +190,7 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
 
     # Apply preprocessing pipeline
     train_processed = apply(train_df.clone(), pipeline)
-
+    
     # Tạo labels
     train_labels = create_training_labels(train_processed)
 
@@ -217,14 +217,14 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
     # MLflow experiment setup với fallback
     experiment_name = "lgbm_ranker_training"
     use_mlflow = True
-
+    
     try:
         mlflow.set_experiment(experiment_name)
         logging.info("MLflow connection successful")
     except Exception as e:
         logging.warning(f"MLflow connection failed: {e}. Continuing without MLflow tracking.")
         use_mlflow = False
-
+    
     # Start MLflow run với try-catch
     mlflow_run = None
     if use_mlflow:
@@ -244,7 +244,7 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
         # Check if we should fine-tune existing model
         if not force_retrain and model_path:
             ranker = load_existing_model_safely(model_path)
-
+            
             if ranker is not None:
                 # For fine-tuning, we can train with fewer estimators
                 if hasattr(ranker, 'n_estimators'):
@@ -266,7 +266,7 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
                 logging.info("Force retraining enabled. Training new model from scratch.")
             else:
                 logging.info("No existing model found or loading failed. Training new model from scratch.")
-
+            
             # Default parameters
             params = {
                 "objective": "lambdarank",
@@ -276,19 +276,19 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
                 "importance_type": 'gain',
                 "random_state": 42
             }
-
+            
             # Log parameters if MLflow available
             if use_mlflow:
                 try:
                     mlflow.log_params(params)
                 except Exception as e:
                     logging.warning(f"Failed to log MLflow params: {e}")
-
+            
             ranker = LGBMRanker(**params)
 
         # Train the model
         logging.info("Fitting the model...")
-
+        
         # Kiểm tra xem train_final có đủ cột tính năng không
         missing_features = [col for col in feature_cols if col not in train_final.columns]
         if missing_features:
@@ -301,7 +301,7 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
                 mlflow.lightgbm.autolog()
             except Exception as e:
                 logging.warning(f"Failed to enable MLflow autolog: {e}")
-
+                
         ranker.fit(
             train_final[feature_cols].to_pandas(),
             train_final[target].to_pandas(),
@@ -314,11 +314,11 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
             try:
                 feature_importance = dict(zip(feature_cols, ranker.feature_importances_))
                 mlflow.log_dict(feature_importance, "feature_importance.json")
-
+                
                 # Create model signature
                 input_example = train_final[feature_cols].to_pandas().head(1)
                 signature = infer_signature(input_example, ranker.predict(input_example))
-
+                
                 # Log model with metadata and artifacts
                 mlflow.lightgbm.log_model(
                     ranker,
@@ -328,25 +328,25 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
                     registered_model_name="lgbm_ranker",
                     pip_requirements=["lightgbm", "polars", "pandas", "numpy"]
                 )
-
+                
                 # Log additional artifacts
                 mlflow.log_artifact("data/events.json", "data")
                 mlflow.log_artifact("process_pipeline.py", "code")
-
+                
                 # Log model metrics
                 mlflow.log_metric("num_sessions", len(train_final['session'].unique()))
                 mlflow.log_metric("num_events", len(train_final))
-
+                
                 # Register model và promote
                 run_id = mlflow.active_run().info.run_id
                 model_version = register_and_stage_model("lgbm_ranker", run_id)
-
+                
                 if model_version:
                     # Optionally auto-promote to production
                     auto_promote = os.getenv("AUTO_PROMOTE_MODEL", "false").lower() == "true"
                     if auto_promote:
                         promote_model_to_production("lgbm_ranker", model_version)
-
+                
             except Exception as e:
                 logging.warning(f"Failed to log to MLflow: {e}")
 
@@ -357,13 +357,13 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
 
         # Try to copy to the intended location
         copy_success = copy_model_safely(tmp_model_path, save_path)
-
+        
         # Also try to copy to other common locations for accessibility
         backup_locations = [
             "/opt/airflow/model/lgbm_ranker.joblib",
             "/tmp/lgbm_ranker_backup.joblib"
         ]
-
+        
         for backup_path in backup_locations:
             if backup_path != save_path:  # Don't duplicate if same path
                 copy_model_safely(tmp_model_path, backup_path)
@@ -375,7 +375,7 @@ def train_or_finetune_model(train_df, model_path=None, save_path='model/lgbm_ran
             logging.warning("The model will be available for this session but may not persist after container restart")
 
         return ranker
-
+        
     finally:
         # End MLflow run if it was started
         if use_mlflow and mlflow_run:
@@ -447,14 +447,14 @@ def evaluate_ranker_metrics(train_data, ranker, feature_cols, top_k=[5, 10, 20])
                 recall_scores[k].append(recall_k)
 
                 # Hit Rate@K (có ít nhất 1 item relevant trong top K)
-                # hit_rate_k = 1 if top_k_true.sum() > 0 else 0
-                # hit_rates[k].append(hit_rate_k)
+                hit_rate_k = 1 if top_k_true.sum() > 0 else 0
+                hit_rates[k].append(hit_rate_k)
 
         # MRR (Mean Reciprocal Rank)
-        # for i, (pred, true) in enumerate(zip(y_pred, y_true)):
-        #     if true == 1:  # First relevant item
-        #         mrr_scores.append(1.0 / (np.where(np.argsort(y_pred)[::-1] == i)[0][0] + 1))
-        #         break
+        for i, (pred, true) in enumerate(zip(y_pred, y_true)):
+            if true == 1:  # First relevant item
+                mrr_scores.append(1.0 / (np.where(np.argsort(y_pred)[::-1] == i)[0][0] + 1))
+                break
 
     # Tính average metrics
     logging.info(f"Sessions with positive samples: {sessions_with_positives}/{total_sessions}")
@@ -464,11 +464,11 @@ def evaluate_ranker_metrics(train_data, ranker, feature_cols, top_k=[5, 10, 20])
             metrics[f'NDCG_at_{k}'] = np.mean(ndcg_scores[k])
         if recall_scores[k]:
             metrics[f'Recall_at_{k}'] = np.mean(recall_scores[k])
-        # if hit_rates[k]:
-        #    metrics[f'HitRate_at_{k}'] = np.mean(hit_rates[k])
+        if hit_rates[k]:
+            metrics[f'HitRate_at_{k}'] = np.mean(hit_rates[k])
 
-    # if mrr_scores:
-    #     metrics['MRR'] = np.mean(mrr_scores)
+    if mrr_scores:
+        metrics['MRR'] = np.mean(mrr_scores)
 
     return metrics
 
@@ -477,15 +477,10 @@ def load_complete_training_data():
     Load và kết hợp toàn bộ dữ liệu training từ cả filtered_train_1000.parquet và events.json
     """
     logging.info("Loading complete training data...")
-
+    
     # Load original training data
     try:
-        original_data = pl.read_parquet('data/filtered_train_labels_1000.parquet')
-        original_data = original_data.explode('ground_truth').with_columns([
-            pl.col('ground_truth').alias('aid'),
-            pl.col('type').replace_strict(type2id, return_dtype=pl.UInt8).alias('type') 
-        ])[['session', 'type', 'aid']] 
-        
+        original_data = pl.read_parquet('data/df_mapped_test.parquet')
         logging.info(f"Loaded {len(original_data)} records from filtered_train_1000.parquet")
         logging.info(f"Original data columns: {original_data.columns}")
     except Exception as e:
@@ -505,11 +500,11 @@ def load_complete_training_data():
     if original_data is not None and kafka_data is not None:
         # Ensure columns match by selecting common columns
         common_columns = ['session', 'aid', 'type', 'ts']
-
+        
         # Select only common columns from both dataframes
         original_data = original_data.select(common_columns)
         kafka_data = kafka_data.select(common_columns)
-
+        
         # Ensure column types match
         for col in common_columns:
             if original_data[col].dtype != kafka_data[col].dtype:
@@ -518,7 +513,7 @@ def load_complete_training_data():
                     kafka_data = kafka_data.with_columns(pl.col(col).cast(pl.Int64))
                 else:
                     original_data = original_data.with_columns(pl.col(col).cast(kafka_data[col].dtype))
-
+        
         # Combine the data
         combined_data = pl.concat([original_data, kafka_data])
         logging.info(f"Combined data contains {len(combined_data)} records")
@@ -540,17 +535,17 @@ def main():
         mlflow_tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "file:./mlruns")
         mlflow.set_tracking_uri(mlflow_tracking_uri)
         logging.info(f"Using MLflow tracking URI: {mlflow_tracking_uri}")
-
+        
         # Set model registry URI if provided
         model_registry_uri = os.getenv("MLFLOW_MODEL_REGISTRY_URI")
         if model_registry_uri:
             mlflow.set_registry_uri(model_registry_uri)
             logging.info(f"Using MLflow Model Registry URI: {model_registry_uri}")
-
+        
         # Paths - use /opt/models as primary to match deployment structure
         existing_model_path = '/opt/models/lgbm_ranker_current.joblib'
         new_model_path = '/opt/models/lgbm_ranker.joblib'  # Primary save location
-
+        
         # Alternative paths to try for saving
         alternative_save_paths = [
             '/opt/models/lgbm_ranker_current.joblib',  # Update current symlink
@@ -563,7 +558,7 @@ def main():
 
         # Apply preprocessing pipeline
         train_processed = apply(train_df.clone(), pipeline)
-
+        
         # Tạo labels
         train_labels = create_training_labels(train_processed)
 
@@ -585,13 +580,13 @@ def main():
         if existing_model is not None:
             logging.info("Evaluating existing model on complete training data...")
             metrics = evaluate_ranker_metrics(train_final, existing_model, feature_cols)
-
+            
             # Log metrics to MLflow
             with mlflow.start_run(run_name=f"evaluation_existing_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
                 for metric, value in metrics.items():
                     logging.info(f"{metric}: {value:.4f}")
                     mlflow.log_metric(metric, value)
-
+                
                 # Log feature importances
                 feature_importance = pl.DataFrame({
                     'feature': feature_cols,
@@ -599,16 +594,8 @@ def main():
                 })
                 logging.info("Feature importances:")
                 logging.info(feature_importance)
-                # Trích cột importance thành Python list
-                feat = feature_importance["feature"].to_list()
-                imp  = feature_importance["importance"].to_list()
-
-                # Build một chuỗi text, ví dụ tab-delimited
-                txt = "\n".join(f"{f}\t{v}" for f, v in zip(feat, imp))
-
-                mlflow.log_text(txt, "feature_importance.txt")
-                # mlflow.log_text(feature_importance.to_series(), "feature_importance.txt")
-
+                mlflow.log_text(feature_importance.to_series(), "feature_importance.txt")
+                
                 # Log evaluation summary
                 evaluation_summary = {
                     "metrics": metrics,
@@ -648,7 +635,7 @@ def main():
             '/opt/models/lgbm_ranker_current.joblib',
             '/opt/airflow/model/lgbm_ranker.joblib'
         ]
-
+        
         logging.info("Checking model file locations:")
         for location in model_locations:
             if Path(location).exists():
@@ -660,13 +647,13 @@ def main():
         # Evaluate new model
         logging.info("Evaluating new model on complete training data...")
         metrics = evaluate_ranker_metrics(train_final, model, feature_cols)
-
+        
         # Log metrics to MLflow
         with mlflow.start_run(run_name=f"evaluation_new_{datetime.now().strftime('%Y%m%d_%H%M%S')}"):
             for metric, value in metrics.items():
                 logging.info(f"{metric}: {value:.4f}")
                 mlflow.log_metric(metric, value)
-
+            
             # Log feature importances
             feature_importance = pl.DataFrame({
                 'feature': feature_cols,
@@ -675,15 +662,15 @@ def main():
             logging.info("Feature importances:")
             logging.info(feature_importance)
             # mlflow.log_text(feature_importance.to_string(), "feature_importance.txt")
-
+            
             # Log model
             mlflow.lightgbm.log_model(model, "model")
-
+            
             # Log model file
             model_path = "lgbm_ranker_evaluated.joblib"
             joblib.dump(model, model_path)
             mlflow.log_artifact(model_path)
-
+            
             # Log evaluation summary
             evaluation_summary = {
                 "metrics": metrics,
@@ -697,7 +684,7 @@ def main():
     except Exception as e:
         logging.error(f"Training failed: {e}")
         raise
-
+A
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     main()
