@@ -12,6 +12,7 @@ from airflow.operators.python import PythonOperator
 from airflow.operators.bash import BashOperator
 
 from aiokafka import AIOKafkaConsumer
+from model_validation import validate_model_performance, auto_promote_validated_models
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Cấu hình
@@ -190,7 +191,20 @@ def deploy_model(**context):
         "deployed_model": str(dest), 
         "current_model": str(current_model)
     }
-    # --- ĐỊNH NGHĨA DAG ---
+
+def validate_and_promote_model(**context):
+    """
+    Validate model và promote nếu đạt yêu cầu
+    """
+    try:
+        auto_promote_validated_models()
+        return {"status": "success", "message": "Model validation and promotion completed"}
+    except Exception as e:
+        logging.error(f"Model validation/promotion failed: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# --- ĐỊNH NGHĨA DAG ---
 with DAG(
     dag_id="weekly_model_retraining",
     default_args=default_args,
@@ -228,6 +242,12 @@ with DAG(
         python_callable=deploy_model,
         provide_context=True,
     )
+    
+    validate_promote_task = PythonOperator(
+        task_id="validate_and_promote_model",
+        python_callable=validate_and_promote_model,
+        provide_context=True,
+    )
 
     # Định nghĩa luồng: fetch → validate → train → deploy
-    fetch_task >> validate_task >> train_task >> deploy_task
+    fetch_task >> validate_task >> train_task >> deploy_task >> validate_promote_task
