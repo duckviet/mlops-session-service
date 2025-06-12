@@ -1,0 +1,37 @@
+# monitoring/rules.yml
+
+groups:
+  - name: api_alerts
+    rules:
+      - alert: HighApiErrorRate
+        expr: >
+          (
+            sum(rate(http_requests_total{job="fastapi-app", status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{job="fastapi-app"}[5m]))
+          ) * 100 > 50
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High API Error Rate"
+          description: "The API error rate is {{ $value | printf \"%.2f\" }}%, which is above the 50% threshold."
+
+      - alert: LowModelConfidence
+        expr: model_confidence_score < 0.6
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low Model Confidence Score"
+          description: "The model's confidence score has dropped to {{ $value | printf \"%.2f\" }}, which is below the 0.6 threshold."
+          
+      - alert: HighApiLatency
+        expr: >
+          histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="fastapi-app"}[5m])) by (le)) > 1.0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API Latency (p95)"
+          description: "The 95th percentile API latency is over 1 second."
