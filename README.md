@@ -245,7 +245,7 @@ Use the upgraded `traffic_generator.sh` script to test the monitoring and alerti
 [**Checkout our Grafana Dashboard - share in snapshots.raintank**](https://snapshots.raintank.io/dashboard/snapshot/DyAhJcVv5TTcIwPQxPZabgAMAY1mOWY4?orgId=0)
 
 ## Video demo 
-
+https://github.com/user-attachments/assets/fc0040eb-dff3-4bc8-8b6a-1f22934519a3
 
     
 
