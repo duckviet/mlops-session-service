@@ -3,11 +3,17 @@ import os
 import random
 import joblib
 import polars as pl
+import logging
+import time 
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List
 from contextlib import asynccontextmanager
+
+from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Gauge, Histogram
+
 
 from process_pipeline import pipeline, apply
 from kafka_producer import KafkaProducer
@@ -16,6 +22,29 @@ from fastapi.middleware.cors import CORSMiddleware
 
 import asyncio, socket
 
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+# --- KHỞI TẠO CUSTOM METRICS CHO PROMETHEUS ---
+# 1. Model Inference Latency: Theo dõi độ trễ của bước dự đoán
+model_inference_latency = Histogram(
+    'model_inference_latency_seconds',
+    'Latency for a single model inference step (in seconds)'
+)
+
+# 2. Model Confidence Score: Theo dõi điểm tin cậy của model
+model_confidence_score = Gauge(
+    'model_confidence_score',
+    'The average confidence score of the top K recommendations'
+)
+
+# 3. CPU Interface Time
+model_cpu_inference_time_seconds = Histogram(
+    'model_cpu_inference_time_seconds',
+    'CPU time spent on a single model inference step (in seconds)'
+)
 
 async def wait_for_kafka(host, port, retries=10, delay=3):
     for i in range(retries):
@@ -41,6 +70,12 @@ async def lifespan(app: FastAPI):
     await kafka_producer.stop()
 
 app = FastAPI(lifespan=lifespan)
+
+# --- GẮN INSTRUMENTATOR VÀO APP ---
+# Thao tác này sẽ tự động tạo các metrics API (RPS, latency, errors)
+# và tạo ra endpoint /metrics
+Instrumentator().instrument(app).expose(app)
+
 
 # ----- Add Middleware -----
 app.add_middleware(
@@ -96,6 +131,9 @@ class RecRequest(BaseModel):
     session_id: int
     current_events: List[Event]
     top_k: int = 20
+    
+    simulate_latency: Optional[bool] = False
+    simulate_error: Optional[bool] = False
 
 class Recommendation(BaseModel):
     aid: int
@@ -119,6 +157,21 @@ def generate_candidates_for_session(
 # ----- Endpoint chính -----
 @app.post("/recommendations", response_model=RecResponse)
 async def recommend(req: RecRequest):
+
+    # --- KHỐI CODE GIẢ LẬP KỊCH BẢN ---
+    # Giả lập độ trễ cao (High Latency)
+    if req.simulate_latency:
+        
+        latency_duration = random.uniform(1.5, 2.5)
+        logger.info(f"Simulating high latency of {latency_duration:.2f}s for session {req.session_id}")
+        await asyncio.sleep(latency_duration)
+
+    # Giả lập lỗi (High Error Rate)
+    if req.simulate_error:
+        logger.warning(f"Simulating a 500 server error for session {req.session_id}")
+        raise HTTPException(status_code=500, detail="Simulated Internal Server Error")
+    # --- KẾT THÚC KHỐI GIẢ LẬP ---
+
     if ranker is None:
         raise HTTPException(503, "Recommendation model is not available.")
 
@@ -148,15 +201,32 @@ async def recommend(req: RecRequest):
         return RecResponse(session_id=req.session_id, recommendations=[])
 
     X = df_cand.select(feature_cols).to_pandas()
-    if hasattr(ranker, "booster_"):
-        scores = ranker.booster_.predict(X.values)
-    else:
-        scores = ranker.predict(X)
+    
+    # --- BẮT ĐẦU ĐO LƯỜNG VÀ GHI NHẬN METRICS ---
+    start_time = time.time()
+    with model_inference_latency.time(): # Tự động đo latency cho khối code này
+        start_cpu = time.process_time()
+        if hasattr(ranker, "booster_"):
+            scores = ranker.booster_.predict(X.values)
+        else:
+            scores = ranker.predict(X)
+        cpu_duration = time.process_time() - start_cpu
+        model_cpu_inference_time_seconds.observe(cpu_duration) # Ghi nhận CPU Time 
+    # --- KẾT THÚC ĐO LƯỜNG ---
 
     # 3) Trả về top-k
     pairs = list(zip(df_cand["aid"].to_list(), scores))
     topk = sorted(pairs, key=lambda x: x[1], reverse=True)[: req.top_k]
     recs = [Recommendation(aid=aid, score=float(sc)) for aid, sc in topk]
+
+    # --- GHI NHẬN CONFIDENCE SCORE ---
+    if topk:
+        # Lấy trung bình score của các sản phẩm được đề xuất làm confidence
+        avg_confidence = sum(s for _, s in topk) / len(topk)
+        model_confidence_score.set(avg_confidence)
+        logger.info(f"Set model confidence score to: {avg_confidence:.4f}")
+
+    logger.info(f"Successfully generated {len(recs)} recommendations for session {req.session_id}")
 
     return RecResponse(session_id=req.session_id, recommendations=recs)
 
